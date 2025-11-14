@@ -1,23 +1,17 @@
 """
 FEMS db models
-This file defines all database tables as classes — showing how Python classes map to database tables.
+this file defines all database tables as classes basically showing howpython classes map to database tables
 """
 
-from flask_sqlalchemy import SQLAlchemy  # For connecting to the db
-from flask_login import UserMixin        # For user authentication
-from datetime import datetime, timezone  # For timestamps
+from flask_sqlalchemy import SQLAlchemy #for connecting to the db
+from flask_login import UserMixin #for user auth
+from datetime import datetime, timezone #for timestamps
 
-# --------------------------------------------------------------------
-# 1️⃣ Initialize SQLAlchemy instance (shared across backend)
-# --------------------------------------------------------------------
-# If db is created in app.py, import it from there instead:
-# from app import db
-# Otherwise, uncomment the line below if you initialize it here.
-db = SQLAlchemy()
+#creating db connection obj that all db models will be using to connect with db
+#db=SQLAlchemy()
+from .extensions import db
 
-# --------------------------------------------------------------------
-# 2️⃣ User Table
-# --------------------------------------------------------------------
+#USER TABLE
 class User(db.Model, UserMixin):
     __tablename__ = 'users'
     
@@ -31,13 +25,14 @@ class User(db.Model, UserMixin):
     created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
     last_login = db.Column(db.DateTime)
     
-    # Relationships with other tables
+    #relationships with other tables
     vendor_profile = db.relationship('Vendor', backref='user', uselist=False, cascade='all, delete-orphan')
     orders = db.relationship('Order', foreign_keys='Order.customer_id', backref='customer', lazy=True)
     email_verifications = db.relationship('EmailVerification', backref='user', lazy=True, cascade='all, delete-orphan')
     notifications = db.relationship('Notification', backref='user', lazy=True, cascade='all, delete-orphan')
     
     def to_dict(self):
+        #converting user object to dict for JSON responses
         return {
             'id': self.id,
             'email': self.email,
@@ -47,10 +42,8 @@ class User(db.Model, UserMixin):
             'is_email_verified': self.is_email_verified,
             'created_at': self.created_at.isoformat() if self.created_at else None
         }
-
-# --------------------------------------------------------------------
-# 3️⃣ Email Verifications Table
-# --------------------------------------------------------------------
+        
+#EMAIL VERIFICATIONS TABLE
 class EmailVerification(db.Model):
     __tablename__ = 'email_verifications'
     
@@ -60,11 +53,13 @@ class EmailVerification(db.Model):
     expires_at = db.Column(db.DateTime, nullable=False)
     is_used = db.Column(db.Boolean, default=False)
     created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
+    
+    # Relationship - not need of dup
+    #user = db.relationship('User', backref='verification_codes')
+    
 
-# --------------------------------------------------------------------
-# 4️⃣ Vendor Table
-# --------------------------------------------------------------------
-class Vendor(db.Model):
+#VENDOR TABLE
+class Vendor(db.Model): #db.model means this class is a db table
     __tablename__ = 'vendors'
     
     id = db.Column(db.Integer, primary_key=True)
@@ -76,9 +71,9 @@ class Vendor(db.Model):
     created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
     
     # Relationships
-    menu = db.relationship('Menu', backref='vendor', uselist=False, cascade='all, delete-orphan')
+    menu = db.relationship('Menu', backref='vendor', uselist=False, cascade='all, delete-orphan')#vendor deleted -> menu deleted 
     menu_items = db.relationship('MenuItem', backref='vendor', lazy=True, cascade='all, delete-orphan')
-    orders = db.relationship('Order', foreign_keys='Order.vendor_id', backref='vendor', lazy=True)
+    orders = db.relationship('Order', foreign_keys='Order.vendor_id', backref='vendor', lazy=True) #lazy =true means accessed when needed
     analytics_events = db.relationship('VendorAnalyticsEvent', backref='vendor', lazy=True, cascade='all, delete-orphan')
     
     def to_dict(self):
@@ -90,15 +85,13 @@ class Vendor(db.Model):
             'delivery_available': self.delivery_available,
             'menu': self.menu.to_dict() if self.menu else None  
         }
-
-# --------------------------------------------------------------------
-# 5️⃣ Menu Table
-# --------------------------------------------------------------------
+        
+#MENU TABLE
 class Menu(db.Model):
     __tablename__ = 'menus'
     
     id = db.Column(db.Integer, primary_key=True)
-    vendor_id = db.Column(db.Integer, db.ForeignKey('vendors.id', ondelete='CASCADE'), unique=True, nullable=False)
+    vendor_id = db.Column(db.Integer, db.ForeignKey('vendors.id', ondelete='CASCADE'), unique=True,nullable=False)
     title = db.Column(db.String(100), nullable=False)
     is_active = db.Column(db.Boolean, default=True)
     created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
@@ -114,9 +107,7 @@ class Menu(db.Model):
             'items': [item.to_dict() for item in self.menu_items]
         }
 
-# --------------------------------------------------------------------
-# 6️⃣ Menu Items Table
-# --------------------------------------------------------------------
+#MENU ITEMS TABLE
 class MenuItem(db.Model):
     __tablename__ = 'menu_items'
     
@@ -131,6 +122,9 @@ class MenuItem(db.Model):
     image_url = db.Column(db.Text)
     created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
     
+    #relationships
+    order_items = db.relationship('OrderItem', backref='menu_item', lazy=True)
+    
     def to_dict(self):
         return {
             'id': self.id,
@@ -141,10 +135,9 @@ class MenuItem(db.Model):
             'preparation_time_minutes': self.preparation_time_minutes,
             'image_url': self.image_url
         }
+        
 
-# --------------------------------------------------------------------
-# 7️⃣ Orders Table
-# --------------------------------------------------------------------
+#ORDERS TABLE
 class Order(db.Model):
     __tablename__ = 'orders'
     
@@ -154,8 +147,8 @@ class Order(db.Model):
     placed_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
     scheduled_for = db.Column(db.DateTime, nullable=False)
     total_amount = db.Column(db.Numeric(12, 2), nullable=False)
-    status = db.Column(db.String(20), default='pending')
-    payment_status = db.Column(db.String(20), default='pending')
+    status = db.Column(db.String(20), default='pending')  # pending, accepted, preparing, ready, completed, cancelled, rejected
+    payment_status = db.Column(db.String(20), default='pending')  # pending, paid, failed
     pickup_or_delivery = db.Column(db.String(20), default='pickup')
     notes = db.Column(db.Text)
     estimated_ready_at = db.Column(db.DateTime)
@@ -179,9 +172,7 @@ class Order(db.Model):
             'items': [item.to_dict() for item in self.order_items]
         }
 
-# --------------------------------------------------------------------
-# 8️⃣ Order Items Table
-# --------------------------------------------------------------------
+#ORDER ITEMS TABLE 
 class OrderItem(db.Model):
     __tablename__ = 'order_items'
     
@@ -201,10 +192,8 @@ class OrderItem(db.Model):
             'quantity': self.quantity,
             'notes': self.notes
         }
-
-# --------------------------------------------------------------------
-# 9️⃣ Notifications Table
-# --------------------------------------------------------------------
+        
+#NOTIFICATION TABLE 
 class Notification(db.Model):
     __tablename__ = 'notifications'
     
@@ -214,10 +203,11 @@ class Notification(db.Model):
     payload = db.Column(db.JSON)
     is_read = db.Column(db.Boolean, default=False)
     created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
+    
+    #relationship - no need of dup
+    #user = db.relationship('User', backref='notifications')
 
-# --------------------------------------------------------------------
-# 🔟 Vendor Analytics Events Table
-# --------------------------------------------------------------------
+#VENDOR ANALYTICS TABLE
 class VendorAnalyticsEvent(db.Model):
     __tablename__ = 'vendor_analytics_events'
     
@@ -226,6 +216,9 @@ class VendorAnalyticsEvent(db.Model):
     event_type = db.Column(db.String(50), nullable=False)
     meta = db.Column(db.JSON)
     event_time = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
+    
+    # Relationship - no need of dup
+    #vendor = db.relationship('Vendor', backref='analytics_events')
     
     def to_dict(self):
         return {
