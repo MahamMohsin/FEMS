@@ -357,6 +357,7 @@ from flask import Flask, jsonify
 from .config import Config
 from .extensions import db
 from .auth import bp as auth_bp
+from .vendors import bp as vendors_bp
 import os
 
 def create_app():
@@ -366,6 +367,8 @@ def create_app():
 
     # register blueprint(s)
     app.register_blueprint(auth_bp)
+    app.register_blueprint(vendors_bp)
+
 
     @app.route("/")
     def home():
@@ -374,8 +377,11 @@ def create_app():
             "version": "1.0",
             "endpoints": {
                 "register": "/api/register",
+                "verify_email": "/api/verify-email",
+                "complete_profile": "/api/complete-profile",
                 "login": "/api/login",
-                "profile": "/api/profile"
+                "vendor_menu": "/api/vendors/<vendor_id>/menu",
+                "menu_items": "/api/vendors/<vendor_id>/menu/<menu_id>/items"
             }
         })
 
@@ -391,4 +397,3 @@ if __name__ == "__main__":
     
 
     app.run(debug=True, port=5000)
-

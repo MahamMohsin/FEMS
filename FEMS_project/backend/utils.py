@@ -3,6 +3,8 @@ import bcrypt
 import jwt
 from datetime import datetime, timedelta
 from flask import current_app
+import secrets
+
 
 def hash_password(plain_password: str) -> str:
     pw_bytes = plain_password.encode("utf-8")
@@ -26,3 +28,7 @@ def decode_token(token: str):
     secret = current_app.config["SECRET_KEY"]
     algorithm = current_app.config.get("JWT_ALGORITHM", "HS256")
     return jwt.decode(token, secret, algorithms=[algorithm])
+
+def generate_verification_code(length=32) -> str:
+    # generates a secure hex token (length bytes -> 2*length hex chars)
+    return secrets.token_hex(length)

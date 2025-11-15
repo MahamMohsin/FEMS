@@ -1,8 +1,8 @@
 # backend/auth.py
 from flask import Blueprint, request, jsonify, current_app
 from .extensions import db
-from .models import User, EmailVerification  # import any models you need
-from .utils import hash_password, check_password, create_token, decode_token
+from .models import User, EmailVerification, Vendor  # import any models you need
+from .utils import hash_password, check_password, create_token, decode_token, generate_verification_code
 from datetime import datetime, timedelta
 from functools import wraps
 
@@ -26,10 +26,43 @@ def token_required(f):
             return jsonify({"error": str(e)}), 401
     return wrapper
 
+#register
+# @bp.route("/register", methods=["POST"])
+# def register():
+#     data = request.get_json() or {}
+#     required = ["email", "password", "full_name", "phone", "role"]
+#     for r in required:
+#         if r not in data or not data[r]:
+#             return jsonify({"error": f"{r} is required"}), 400
+
+#     email = data["email"].lower().strip()
+#     if User.query.filter_by(email=email).first():
+#         return jsonify({"error": "Email already registered"}), 409
+
+#     if len(data["password"]) < 6:
+#         return jsonify({"error": "Password must be at least 6 characters"}), 400
+
+#     hashed = hash_password(data["password"])
+#     new_user = User(
+#         email=email,
+#         password_hash=hashed,
+#         role="customer",# default role - set later on complete-profile
+#         full_name=data["full_name"].strip(),
+#         phone=data["phone"].strip()
+#     )
+#     try:
+#         db.session.add(new_user)
+#         db.session.commit()
+#         # optionally: create verification code in EmailVerification here if required
+#         return jsonify({"message": "User registered", "user": new_user.to_dict()}), 201
+#     except Exception as e:
+#         db.session.rollback()
+#         return jsonify({"error": "Database error", "details": str(e)}), 500
+
 @bp.route("/register", methods=["POST"])
 def register():
     data = request.get_json() or {}
-    required = ["email", "password", "full_name", "phone", "role"]
+    required = ["email", "password"]
     for r in required:
         if r not in data or not data[r]:
             return jsonify({"error": f"{r} is required"}), 400
@@ -38,25 +71,65 @@ def register():
     if User.query.filter_by(email=email).first():
         return jsonify({"error": "Email already registered"}), 409
 
-    if len(data["password"]) < 6:
+    password = data["password"]
+    if len(password) < 6:
         return jsonify({"error": "Password must be at least 6 characters"}), 400
 
-    hashed = hash_password(data["password"])
-    new_user = User(
-        email=email,
-        password_hash=hashed,
-        role=data["role"].lower(),
-        full_name=data["full_name"].strip(),
-        phone=data["phone"].strip()
-    )
+    hashed = hash_password(password)
+    user = User(email=email, password_hash=hashed, role="customer")  # default role - set later on complete-profile
     try:
-        db.session.add(new_user)
+        db.session.add(user)
         db.session.commit()
-        # optionally: create verification code in EmailVerification here if required
-        return jsonify({"message": "User registered", "user": new_user.to_dict()}), 201
+
+        # create verification code for this user
+        code = generate_verification_code(16)  # 32 hex chars
+        expires_at = datetime.utcnow() + timedelta(minutes=current_app.config.get("VERIFICATION_CODE_EXPIRES_MINUTES", 10))
+        ev = EmailVerification(user_id=user.id, code=code, expires_at=expires_at)
+        db.session.add(ev)
+        db.session.commit()
+
+        # For production: send code via email. For dev, return code in response (or log it)
+        return jsonify({
+            "message": "User created. Please verify your email.",
+            "user": user.to_dict(),
+            "verification_code": code  # remove in production; for dev convenience
+        }), 201
     except Exception as e:
         db.session.rollback()
         return jsonify({"error": "Database error", "details": str(e)}), 500
+    
+
+# Verify email
+@bp.route("/verify-email", methods=["POST"])
+def verify_email():
+    data = request.get_json() or {}
+    email = data.get("email", "").lower().strip()
+    code = data.get("code", "").strip()
+    if not email or not code:
+        return jsonify({"error": "email and code are required"}), 400
+
+    user = User.query.filter_by(email=email).first()
+    if not user:
+        return jsonify({"error": "user not found"}), 404
+
+    verification = EmailVerification.query.filter_by(user_id=user.id, code=code, is_used=False).first()
+    if not verification:
+        return jsonify({"error": "invalid or used code"}), 400
+
+    if verification.expires_at < datetime.utcnow():
+        return jsonify({"error": "code expired"}), 410
+
+    try:
+        verification.is_used = True
+        user.is_email_verified = True
+        db.session.commit()
+        return jsonify({"message": "email verified", "user": user.to_dict()}), 200
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({"error": "DB error", "details": str(e)}), 500
+    
+
+# Login (returns JWT)
 
 @bp.route("/login", methods=["POST"])
 def login():
@@ -83,3 +156,54 @@ def login():
 @token_required
 def profile(current_user):
     return jsonify({"user": current_user.to_dict()}), 200
+
+
+# Complete profile — full_name, phone, role; create vendor if role == 'vendor'
+
+@bp.route("/complete-profile", methods=["POST"])
+@token_required
+def complete_profile(current_user):
+    # current_user is an instance of User returned by decorator
+    data = request.get_json() or {}
+    full_name = data.get("full_name", "").strip()
+    phone = data.get("phone", "").strip()
+    role = data.get("role", "").lower().strip()
+
+    if not full_name or not phone or role not in ("vendor", "customer"):
+        return jsonify({"error": "full_name, phone and role (vendor/customer) are required"}), 400
+
+    # ensure email verified
+    if not current_user.is_email_verified:
+        return jsonify({"error": "email not verified"}), 403
+
+    current_user.full_name = full_name
+    current_user.phone = phone
+    current_user.role = role
+
+    vendor_data = None
+    try:
+        if role == "vendor":
+            # if vendor profile does not exist, create it
+            if not current_user.vendor_profile:
+                vendor_name = data.get("vendor_name", f"{full_name}'s Vendor").strip()
+                location = data.get("location", "").strip()
+                new_vendor = Vendor(user_id=current_user.id, vendor_name=vendor_name, location=location)
+                db.session.add(new_vendor)
+                db.session.flush()  # ensure new_vendor.id available
+                vendor_data = new_vendor.to_dict()
+            else:
+                # If vendor exists, optionally update vendor fields:
+                vendor = current_user.vendor_profile
+                vendor.vendor_name = data.get("vendor_name", vendor.vendor_name)
+                vendor.location = data.get("location", vendor.location)
+                vendor_data = vendor.to_dict()
+
+        db.session.commit()
+        return jsonify({
+            "message": "Profile completed",
+            "user": current_user.to_dict(),
+            "vendor": vendor_data
+        }), 200
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({"error": "db error", "details": str(e)}), 500
