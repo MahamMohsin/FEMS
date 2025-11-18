@@ -358,6 +358,7 @@ from .config import Config
 from .extensions import db
 from .auth import bp as auth_bp
 from .vendors import bp as vendors_bp
+from .customer_routes import bp as customer_bp 
 import os
 
 def create_app():
@@ -368,6 +369,7 @@ def create_app():
     # register blueprint(s)
     app.register_blueprint(auth_bp)
     app.register_blueprint(vendors_bp)
+    app.register_blueprint(customer_bp)
 
 
     @app.route("/")
