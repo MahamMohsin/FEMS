@@ -10,3 +10,5 @@ class Config:
     SECRET_KEY = os.getenv("SECRET_KEY") or "dev-secret"
     JWT_ALGORITHM = "HS256"
     JWT_EXPIRES_DAYS = int(os.getenv("JWT_EXPIRES_DAYS", 7))
+
+#print("DEBUG DATABASE_URL:", Config.SQLALCHEMY_DATABASE_URI)
