@@ -15,6 +15,7 @@ Features:
 #request used to access incoming http requests
 #jsonify converts python objects to json format
 from flask import Blueprint, request, jsonify 
+from sqlalchemy import text
 from .extensions import db
 from .models import Vendor, Menu, MenuItem, Order, OrderItem, User
 #token_required decorator to check if user is authenticated
@@ -107,7 +108,7 @@ def get_vendor_menu(current_user, vendor_id):
     SQL: Multiple LEFT JOINs
     """
     try:
-        # Get vendor info
+        # Get vendor info - FIXED: Use :param syntax
         vendor_sql = """
             SELECT 
                 id, 
@@ -116,7 +117,7 @@ def get_vendor_menu(current_user, vendor_id):
                 pickup_available, 
                 delivery_available
             FROM vendors 
-            WHERE id = %(vendor_id)s;
+            WHERE id = :vendor_id;
         """
         
         vendor_result = db.session.execute(
@@ -127,7 +128,7 @@ def get_vendor_menu(current_user, vendor_id):
         if not vendor_result:
             return jsonify({"error": "Vendor not found"}), 404
         
-        # Get menu with items
+        # Get menu with items - FIXED: Use :param syntax
         menu_sql = """
             SELECT 
                 m.id AS menu_id,
@@ -142,7 +143,7 @@ def get_vendor_menu(current_user, vendor_id):
                 mi.image_url
             FROM menus m
             LEFT JOIN menu_items mi ON m.id = mi.menu_id
-            WHERE m.vendor_id = %(vendor_id)s AND m.is_active = TRUE
+            WHERE m.vendor_id = :vendor_id AND m.is_active = TRUE
             ORDER BY mi.name;
         """
         
@@ -187,7 +188,7 @@ def get_vendor_menu(current_user, vendor_id):
 
 
 # ============================================
-# 3. PLACE ORDER (Stored Procedure)
+# 3. PLACE ORDER (Stored Procedure) - FULLY FIXED
 # ============================================
 @bp.route("/orders", methods=["POST"])
 @token_required
@@ -232,15 +233,15 @@ def place_order(current_user):
         # Prepare items as JSON
         items_json = json.dumps(data["items"])
         
-        # Call stored procedure
+        # CRITICAL FIX: ALL parameters use :param syntax, use CAST() for jsonb
         sql = """
             SELECT * FROM place_customer_order(
-                %(customer_id)s,
-                %(vendor_id)s,
-                %(scheduled_for)s,
-                %(pickup_or_delivery)s,
-                %(notes)s,
-                %(items)s::jsonb
+                :customer_id,
+                :vendor_id,
+                :scheduled_for,
+                :pickup_or_delivery,
+                :notes,
+                CAST(:items AS jsonb)
             );
         """
         
@@ -266,7 +267,7 @@ def place_order(current_user):
         if result.status_message.startswith("ERROR"):
             return jsonify({"error": result.status_message}), 400
         
-        # Get complete order details
+        # Get complete order details - FIXED: Use :param syntax
         order_sql = """
             SELECT 
                 o.id, 
@@ -278,7 +279,7 @@ def place_order(current_user):
                 v.location
             FROM orders o
             JOIN vendors v ON o.vendor_id = v.id
-            WHERE o.id = %(order_id)s;
+            WHERE o.id = :order_id;
         """
         
         order = db.session.execute(
@@ -320,6 +321,7 @@ def get_order_details(current_user, order_id):
     SQL: Complex query with subqueries
     """
     try:
+        # FIXED: Use :param syntax
         sql = """
             SELECT 
                 o.id,
@@ -338,7 +340,7 @@ def get_order_details(current_user, order_id):
                 (SELECT SUM(quantity) FROM order_items WHERE order_id = o.id) AS total_quantity
             FROM orders o
             JOIN vendors v ON o.vendor_id = v.id
-            WHERE o.id = %(order_id)s AND o.customer_id = %(customer_id)s;
+            WHERE o.id = :order_id AND o.customer_id = :customer_id;
         """
         
         result = db.session.execute(
@@ -349,7 +351,7 @@ def get_order_details(current_user, order_id):
         if not result:
             return jsonify({"error": "Order not found"}), 404
         
-        # Get order items
+        # Get order items - FIXED: Use :param syntax
         items_sql = """
             SELECT 
                 id,
@@ -359,7 +361,7 @@ def get_order_details(current_user, order_id):
                 notes,
                 (price_snapshot * quantity) AS item_total
             FROM order_items 
-            WHERE order_id = %(order_id)s
+            WHERE order_id = :order_id
             ORDER BY id;
         """
         
@@ -398,6 +400,7 @@ def get_order_history(current_user):
         if limit < 1 or limit > 100:
             return jsonify({"error": "Limit must be between 1 and 100"}), 400
         
+        # FIXED: Use :param syntax
         sql = """
             SELECT 
                 o.id AS order_id,
@@ -421,7 +424,7 @@ def get_order_history(current_user):
             FROM orders o
             JOIN vendors v ON o.vendor_id = v.id
             LEFT JOIN order_items oi ON o.id = oi.order_id
-            WHERE o.customer_id = %(customer_id)s
+            WHERE o.customer_id = :customer_id
         """
         
         params = {"customer_id": current_user.id}
@@ -431,13 +434,13 @@ def get_order_history(current_user):
             valid_statuses = ['pending', 'accepted', 'preparing', 'ready', 'completed', 'cancelled', 'rejected']
             if status_filter not in valid_statuses:
                 return jsonify({"error": f"Invalid status. Must be one of: {', '.join(valid_statuses)}"}), 400
-            sql += " AND o.status = %(status)s"
+            sql += " AND o.status = :status"
             params["status"] = status_filter
         
         sql += """
             GROUP BY o.id, o.status, o.total_amount, o.placed_at, o.scheduled_for, v.vendor_name, v.location
             ORDER BY o.placed_at DESC
-            LIMIT %(limit)s;
+            LIMIT :limit;
         """
         params["limit"] = limit
         
@@ -466,10 +469,11 @@ def cancel_order(current_user, order_id):
     SQL: Calls cancel_customer_order() stored procedure
     """
     try:
+        # FIXED: Use :param syntax
         sql = """
             SELECT cancel_customer_order(
-                %(order_id)s, 
-                %(customer_id)s
+                :order_id, 
+                :customer_id
             ) AS result;
         """
         
@@ -508,16 +512,17 @@ def get_customer_stats(current_user):
     SQL: Uses stored functions and views
     """
     try:
+        # FIXED: Use :param syntax
         sql = """
             SELECT 
-                get_customer_order_count(%(customer_id)s) AS total_orders,
+                get_customer_order_count(:customer_id) AS total_orders,
                 COALESCE(
                     (SELECT total_spent FROM customer_order_summary_view 
-                     WHERE customer_id = %(customer_id)s), 
+                     WHERE customer_id = :customer_id), 
                     0
                 ) AS total_spent,
                 (SELECT last_order_date FROM customer_order_summary_view 
-                 WHERE customer_id = %(customer_id)s) AS last_order;
+                 WHERE customer_id = :customer_id) AS last_order;
         """
         
         result = db.session.execute(
