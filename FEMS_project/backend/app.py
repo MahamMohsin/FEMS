@@ -372,19 +372,23 @@ def create_app():
 
     @app.route("/")
     def home():
-        return jsonify({
+       return jsonify({
             "message": "FEMS Backend API is running!",
             "version": "1.0",
+            "status": "active",
             "endpoints": {
                 "register": "/api/register",
                 "verify_email": "/api/verify-email",
                 "complete_profile": "/api/complete-profile",
                 "login": "/api/login",
-                "vendor_menu": "/api/vendors/<vendor_id>/menu",
-                "menu_items": "/api/vendors/<vendor_id>/menu/<menu_id>/items"
+                "profile": "/api/profile",
+                "create_menu": "/api/vendors/<vendor_id>/menu",
+                "add_items": "/api/vendors/<vendor_id>/menu/<menu_id>/items",
+                "update_item": "/api/vendors/<vendor_id>/menu/<menu_id>/items/<item_id>",
+                "delete_item": "/api/vendors/<vendor_id>/menu/<menu_id>/items/<item_id>",
+                "get_vendor": "/api/vendors/<vendor_id>"
             }
         })
-
     return app
 
 if __name__ == "__main__":
