@@ -1,248 +1,716 @@
 # backend/vendors.py
+"""
+Vendor Routes for FEMS - REFACTORED VERSION
+Uses Stored Procedures & Raw SQL (Same approach as customer_routes.py)
+
+Features:
+1. Menu Management (Create, View)
+2. Menu Items (Add, Update, Delete)
+3. Order Management (View, Update Status)
+4. Analytics & Statistics
+5. Inventory Tracking
+"""
+
 from flask import Blueprint, request, jsonify
 from .extensions import db
-from .models import Vendor, Menu, MenuItem
+from .models import Vendor  # Only for type hints/validation
 from .auth import token_required
-from datetime import datetime
+from datetime import datetime, timedelta
+from decimal import Decimal
+import json
 
 bp = Blueprint("vendors", __name__, url_prefix="/api/vendors")
 
-# Create menu for a vendor (only owner)
+
+def require_vendor(f):
+    """Decorator to ensure user is a vendor"""
+    from functools import wraps
+    @wraps(f)
+    def wrapper(current_user, *args, **kwargs):
+        if current_user.role != 'vendor':
+            return jsonify({"error": "Vendor access only"}), 403
+        return f(current_user, *args, **kwargs)
+    return wrapper
+
+
+def row_to_dict(row):
+    """Convert database row to JSON-serializable dictionary"""
+    if row is None:
+        return None
+    
+    result = dict(row._mapping)
+    
+    # Convert Decimal to float and datetime to ISO format
+    for key, value in result.items():
+        if isinstance(value, Decimal):
+            result[key] = float(value)
+        elif isinstance(value, datetime):
+            result[key] = value.isoformat()
+    
+    return result
+
+
+def verify_vendor_ownership(current_user_id, vendor_id):
+    """Verify that current user owns the vendor account"""
+    sql = "SELECT 1 FROM vendors WHERE id = :vendor_id AND user_id = :user_id"
+    result = db.session.execute(
+        db.text(sql),
+        {"vendor_id": vendor_id, "user_id": current_user_id}
+    ).first()
+    return result is not None
+
+
+# ============================================
+# 1. CREATE MENU
+# ============================================
 @bp.route("/<int:vendor_id>/menu", methods=["POST"])
 @token_required
+@require_vendor
 def create_menu(current_user, vendor_id):
-    vendor = Vendor.query.get(vendor_id)
-    if not vendor:
-        return jsonify({"error": "vendor not found"}), 404
-    if vendor.user_id != current_user.id:
-        return jsonify({"error": "forbidden"}), 403
-
-    if vendor.menu:
-        return jsonify({"error": "menu already exists"}), 409
-
-    data = request.get_json() or {}
-    title = data.get("title", "").strip()
-    if not title:
-        return jsonify({"error": "title is required"}), 400
-
-    menu = Menu(vendor_id=vendor_id, title=title)
+    """
+    Create menu for vendor using stored procedure
+    SQL: Calls create_vendor_menu()
+    """
     try:
-        db.session.add(menu)
+        # Verify ownership
+        if not verify_vendor_ownership(current_user.id, vendor_id):
+            return jsonify({"error": "Access denied"}), 403
+        
+        data = request.get_json() or {}
+        title = data.get("title", "").strip()
+        
+        if not title:
+            return jsonify({"error": "title is required"}), 400
+        
+        # Call stored procedure
+        sql = """
+            SELECT * FROM create_vendor_menu(:vendor_id, :title);
+        """
+        
+        result = db.session.execute(
+            db.text(sql),
+            {"vendor_id": vendor_id, "title": title}
+        ).first()
+        
         db.session.commit()
-        return jsonify({"message": "menu created", "menu": menu.to_dict()}), 201
+        
+        if not result or result.status_message.startswith("ERROR"):
+            error_msg = result.status_message if result else "Failed to create menu"
+            return jsonify({"error": error_msg}), 400
+        
+        return jsonify({
+            "message": "Menu created successfully",
+            "menu": {
+                "id": result.menu_id,
+                "title": result.title,
+                "is_active": result.is_active,
+                "created_at": result.created_at.isoformat() if result.created_at else None
+            }
+        }), 201
+        
     except Exception as e:
         db.session.rollback()
-        return jsonify({"error": "db error", "details": str(e)}), 500
+        return jsonify({"error": f"Database error: {str(e)}"}), 500
 
-# Add menu items (single or list)
+
+# ============================================
+# 2. ADD MENU ITEMS
+# ============================================
 @bp.route("/<int:vendor_id>/menu/<int:menu_id>/items", methods=["POST"])
 @token_required
+@require_vendor
 def add_menu_items(current_user, vendor_id, menu_id):
-    vendor = Vendor.query.get(vendor_id)
-    if not vendor or vendor.user_id != current_user.id:
-        return jsonify({"error": "forbidden or vendor not found"}), 403
-
-    menu = Menu.query.get(menu_id)
-    if not menu or menu.vendor_id != vendor_id:
-        return jsonify({"error": "menu not found"}), 404
-
-    payload = request.get_json() or {}
-    items = payload if isinstance(payload, list) else [payload]
-
-    created = []
+    """
+    Add menu items using stored procedure
+    SQL: Calls add_menu_item() for each item
+    """
     try:
+        # Verify ownership
+        if not verify_vendor_ownership(current_user.id, vendor_id):
+            return jsonify({"error": "Access denied"}), 403
+        
+        payload = request.get_json() or {}
+        items = payload if isinstance(payload, list) else [payload]
+        
+        if not items:
+            return jsonify({"error": "items array cannot be empty"}), 400
+        
+        created_items = []
+        
         for item in items:
-            name = (item.get("name") or "").strip()
-            price = item.get("price", None)
+            name = item.get("name", "").strip()
+            price = item.get("price")
+            
             if not name or price is None:
-                return jsonify({"error": "each item requires name and price"}), 400
-
-            mi = MenuItem(
-                menu_id=menu_id,
-                vendor_id=vendor_id,
-                name=name,
-                description=item.get("description", ""),
-                price=item.get("price"),
-                available=item.get("available", True),
-                preparation_time_minutes=item.get("preparation_time_minutes", 15),
-                image_url=item.get("image_url", "")
-            )
-            db.session.add(mi)
-            db.session.flush()  # get id
-            created.append(mi.to_dict())
+                return jsonify({"error": "Each item requires name and price"}), 400
+            
+            # Call stored procedure for each item
+            sql = """
+                SELECT * FROM add_menu_item(
+                    :vendor_id,
+                    :menu_id,
+                    :name,
+                    :description,
+                    :price,
+                    :available,
+                    :prep_time,
+                    :image_url
+                );
+            """
+            
+            result = db.session.execute(
+                db.text(sql),
+                {
+                    "vendor_id": vendor_id,
+                    "menu_id": menu_id,
+                    "name": name,
+                    "description": item.get("description", ""),
+                    "price": price,
+                    "available": item.get("available", True),
+                    "prep_time": item.get("preparation_time_minutes", 15),
+                    "image_url": item.get("image_url")
+                }
+            ).first()
+            
+            if not result or result.status_message.startswith("ERROR"):
+                db.session.rollback()
+                error_msg = result.status_message if result else "Failed to add item"
+                return jsonify({"error": error_msg}), 400
+            
+            created_items.append({
+                "id": result.item_id,
+                "name": result.name,
+                "description": result.description,
+                "price": float(result.price) if result.price else 0.0,
+                "available": result.available,
+                "preparation_time_minutes": result.preparation_time_minutes,
+                "image_url": result.image_url
+            })
+        
         db.session.commit()
-        return jsonify({"message": "items created", "items": created}), 201
+        
+        return jsonify({
+            "message": f"{len(created_items)} item(s) created successfully",
+            "items": created_items
+        }), 201
+        
     except Exception as e:
         db.session.rollback()
-        return jsonify({"error": "db error", "details": str(e)}), 500
+        return jsonify({"error": f"Database error: {str(e)}"}), 500
 
-# Update menu items
+
+# ============================================
+# 3. UPDATE MENU ITEM
+# ============================================
 @bp.route("/<int:vendor_id>/menu/<int:menu_id>/items/<int:item_id>", methods=["PUT"])
 @token_required
+@require_vendor
 def update_menu_item(current_user, vendor_id, menu_id, item_id):
     """
-    Update an existing menu item
-    
-    Flow:
-    1. Verify vendor ownership
-    2. Verify menu belongs to vendor
-    3. Find the specific menu item
-    4. Update only provided fields (partial update supported)
-    5. Save changes
-    
-    Updatable Fields:
-    - name: Item name
-    - description: Item description
-    - price: Item price
-    - available: Whether item is available
-    - preparation_time_minutes: Time to prepare
-    - image_url: Image URL
-    
-    Expected JSON (all fields optional):
-    {
-        "name": "Updated Pancakes",
-        "price": 6.99,
-        "description": "Extra fluffy pancakes",
-        "available": false,
-        "preparation_time_minutes": 20,
-        "image_url": "https://example.com/new-pancake.jpg"
-    }
-    
-    Returns:
-    - 200: Item updated successfully
-    - 403: User doesn't own vendor
-    - 404: Vendor, menu, or item not found
+    Update menu item using stored procedure
+    SQL: Calls update_menu_item()
     """
-    # Verify vendor exists and user owns it
-    vendor = Vendor.query.get(vendor_id)
-    if not vendor or vendor.user_id != current_user.id:
-        return jsonify({"error": "forbidden or vendor not found"}), 403
-
-    # Verify menu exists and belongs to vendor
-    menu = Menu.query.get(menu_id)
-    if not menu or menu.vendor_id != vendor_id:
-        return jsonify({"error": "menu not found"}), 404
-
-    # Find the specific menu item
-    # Check it belongs to this menu AND vendor (double security)
-    menu_item = MenuItem.query.filter_by(
-        id=item_id,
-        menu_id=menu_id,
-        vendor_id=vendor_id
-    ).first()
-    
-    if not menu_item:
-        return jsonify({"error": "menu item not found"}), 404
-
-    # Get update data from request
-    data = request.get_json() or {}
-
-    # Update only fields that are provided
-    # This allows partial updates (e.g., only updating price)
-    
-    if "name" in data:
-        name = data["name"].strip()
-        if not name:
-            return jsonify({"error": "name cannot be empty"}), 400
-        menu_item.name = name
-
-    if "description" in data:
-        menu_item.description = data["description"].strip()
-
-    if "price" in data:
-        price = data["price"]
-        if price is None or price < 0:
-            return jsonify({"error": "price must be a positive number"}), 400
-        menu_item.price = price
-
-    if "available" in data:
-        # Convert to boolean
-        menu_item.available = bool(data["available"])
-
-    if "preparation_time_minutes" in data:
-        prep_time = data["preparation_time_minutes"]
-        if prep_time is None or prep_time < 0:
-            return jsonify({"error": "preparation_time_minutes must be positive"}), 400
-        menu_item.preparation_time_minutes = prep_time
-
-    if "image_url" in data:
-        menu_item.image_url = data["image_url"].strip()
-
-    # Save changes to database
     try:
+        # Verify ownership
+        if not verify_vendor_ownership(current_user.id, vendor_id):
+            return jsonify({"error": "Access denied"}), 403
+        
+        data = request.get_json() or {}
+        
+        # Call stored procedure with partial update support
+        sql = """
+            SELECT * FROM update_menu_item(
+                :vendor_id,
+                :menu_id,
+                :item_id,
+                :name,
+                :description,
+                :price,
+                :available,
+                :prep_time,
+                :image_url
+            );
+        """
+        
+        result = db.session.execute(
+            db.text(sql),
+            {
+                "vendor_id": vendor_id,
+                "menu_id": menu_id,
+                "item_id": item_id,
+                "name": data.get("name"),
+                "description": data.get("description"),
+                "price": data.get("price"),
+                "available": data.get("available"),
+                "prep_time": data.get("preparation_time_minutes"),
+                "image_url": data.get("image_url")
+            }
+        ).first()
+        
         db.session.commit()
+        
+        if not result or result.status_message.startswith("ERROR"):
+            error_msg = result.status_message if result else "Failed to update item"
+            return jsonify({"error": error_msg}), 400
+        
         return jsonify({
-            "message": "menu item updated successfully",
-            "item": menu_item.to_dict()
+            "message": "Menu item updated successfully",
+            "item": {
+                "id": result.item_id,
+                "name": result.name,
+                "description": result.description,
+                "price": float(result.price) if result.price else 0.0,
+                "available": result.available,
+                "preparation_time_minutes": result.preparation_time_minutes,
+                "image_url": result.image_url
+            }
         }), 200
+        
     except Exception as e:
         db.session.rollback()
-        return jsonify({"error": "db error", "details": str(e)}), 500
+        return jsonify({"error": f"Database error: {str(e)}"}), 500
 
-#delete menu items:
+
+# ============================================
+# 4. DELETE MENU ITEM
+# ============================================
 @bp.route("/<int:vendor_id>/menu/<int:menu_id>/items/<int:item_id>", methods=["DELETE"])
 @token_required
+@require_vendor
 def delete_menu_item(current_user, vendor_id, menu_id, item_id):
     """
-    Delete a menu item
-    
-    Flow:
-    1. Verify vendor ownership
-    2. Verify menu belongs to vendor
-    3. Find and verify menu item
-    4. Delete from database
-    
-    IMPORTANT: This is a hard delete. The item will be permanently removed.
-    Consider implementing soft delete (setting available=False) if you want
-    to preserve order history.
-    
-    Returns:
-    - 200: Item deleted successfully
-    - 403: User doesn't own vendor
-    - 404: Vendor, menu, or item not found
+    Delete menu item using stored procedure
+    SQL: Calls delete_menu_item()
     """
-    # Verify vendor exists and user owns it
-    vendor = Vendor.query.get(vendor_id)
-    if not vendor or vendor.user_id != current_user.id:
-        return jsonify({"error": "forbidden or vendor not found"}), 403
-
-    # Verify menu exists and belongs to vendor
-    menu = Menu.query.get(menu_id)
-    if not menu or menu.vendor_id != vendor_id:
-        return jsonify({"error": "menu not found"}), 404
-
-    # Find the specific menu item
-    menu_item = MenuItem.query.filter_by(
-        id=item_id,
-        menu_id=menu_id,
-        vendor_id=vendor_id
-    ).first()
-    
-    if not menu_item:
-        return jsonify({"error": "menu item not found"}), 404
-
-    # Store item details for response before deletion
-    item_data = menu_item.to_dict()
-
-    # Delete from database
     try:
-        db.session.delete(menu_item)
+        # Verify ownership
+        if not verify_vendor_ownership(current_user.id, vendor_id):
+            return jsonify({"error": "Access denied"}), 403
+        
+        # Call stored procedure
+        sql = """
+            SELECT * FROM delete_menu_item(:vendor_id, :menu_id, :item_id);
+        """
+        
+        result = db.session.execute(
+            db.text(sql),
+            {"vendor_id": vendor_id, "menu_id": menu_id, "item_id": item_id}
+        ).first()
+        
         db.session.commit()
+        
+        if not result or result.status_message.startswith("ERROR"):
+            error_msg = result.status_message if result else "Failed to delete item"
+            return jsonify({"error": error_msg}), 400
+        
         return jsonify({
-            "message": "menu item deleted successfully",
-            "deleted_item": item_data
+            "message": "Menu item deleted successfully",
+            "deleted_item": {
+                "id": result.deleted_item_id,
+                "name": result.deleted_item_name
+            }
         }), 200
+        
     except Exception as e:
         db.session.rollback()
-        return jsonify({"error": "db error", "details": str(e)}), 500
+        return jsonify({"error": f"Database error: {str(e)}"}), 500
 
 
-
-
-# Get vendor detail (menu + items)
+# ============================================
+# 5. GET VENDOR INFO (Public - No Auth)
+# ============================================
 @bp.route("/<int:vendor_id>", methods=["GET"])
 def get_vendor(vendor_id):
-    vendor = Vendor.query.get(vendor_id)
-    if not vendor:
-        return jsonify({"error": "vendor not found"}), 404
-    return jsonify({"vendor": vendor.to_dict()}), 200
+    """
+    Get vendor information with menu and items
+    SQL: Raw SQL with JOINs
+    """
+    try:
+        # Get vendor info
+        vendor_sql = """
+            SELECT 
+                v.id,
+                v.vendor_name,
+                v.location,
+                v.pickup_available,
+                v.delivery_available,
+                v.created_at,
+                u.full_name AS owner_name,
+                u.email AS owner_email
+            FROM vendors v
+            INNER JOIN users u ON v.user_id = u.id
+            WHERE v.id = :vendor_id;
+        """
+        
+        vendor_result = db.session.execute(
+            db.text(vendor_sql),
+            {"vendor_id": vendor_id}
+        ).first()
+        
+        if not vendor_result:
+            return jsonify({"error": "Vendor not found"}), 404
+        
+        # Get menu with items
+        menu_sql = """
+            SELECT 
+                m.id AS menu_id,
+                m.title AS menu_title,
+                m.is_active,
+                mi.id AS item_id,
+                mi.name AS item_name,
+                mi.description,
+                mi.price,
+                mi.available,
+                mi.preparation_time_minutes,
+                mi.image_url
+            FROM menus m
+            LEFT JOIN menu_items mi ON m.id = mi.menu_id
+            WHERE m.vendor_id = :vendor_id
+            ORDER BY mi.name;
+        """
+        
+        menu_result = db.session.execute(
+            db.text(menu_sql),
+            {"vendor_id": vendor_id}
+        )
+        
+        # Process results
+        menu_info = None
+        items = []
+        
+        for row in menu_result:
+            if menu_info is None and row.menu_id:
+                menu_info = {
+                    "id": row.menu_id,
+                    "title": row.menu_title,
+                    "is_active": row.is_active
+                }
+            
+            if row.item_id:
+                items.append({
+                    "id": row.item_id,
+                    "name": row.item_name,
+                    "description": row.description,
+                    "price": float(row.price) if row.price else 0.0,
+                    "available": row.available,
+                    "preparation_time_minutes": row.preparation_time_minutes,
+                    "image_url": row.image_url
+                })
+        
+        if menu_info:
+            menu_info["items"] = items
+        
+        return jsonify({
+            "vendor": {
+                **row_to_dict(vendor_result),
+                "menu": menu_info
+            }
+        }), 200
+        
+    except Exception as e:
+        return jsonify({"error": f"Database error: {str(e)}"}), 500
+
+
+# ============================================
+# 6. GET VENDOR ORDERS (NEW - Order Management)
+# ============================================
+@bp.route("/<int:vendor_id>/orders", methods=["GET"])
+@token_required
+@require_vendor
+def get_vendor_orders(current_user, vendor_id):
+    """
+    Get vendor's orders with filters
+    SQL: Calls get_vendor_orders() stored procedure
+    """
+    try:
+        # Verify ownership
+        if not verify_vendor_ownership(current_user.id, vendor_id):
+            return jsonify({"error": "Access denied"}), 403
+        
+        # Get query parameters
+        status_filter = request.args.get("status")
+        limit = request.args.get("limit", 50, type=int)
+        date_from = request.args.get("date_from")  # ISO format
+        date_to = request.args.get("date_to")      # ISO format
+        
+        # Validate limit
+        if limit < 1 or limit > 100:
+            return jsonify({"error": "Limit must be between 1 and 100"}), 400
+        
+        # Parse dates if provided
+        date_from_parsed = None
+        date_to_parsed = None
+        
+        if date_from:
+            try:
+                date_from_parsed = datetime.fromisoformat(date_from.replace("Z", ""))
+            except:
+                return jsonify({"error": "Invalid date_from format. Use ISO format"}), 400
+        
+        if date_to:
+            try:
+                date_to_parsed = datetime.fromisoformat(date_to.replace("Z", ""))
+            except:
+                return jsonify({"error": "Invalid date_to format. Use ISO format"}), 400
+        
+        # Call stored procedure
+        sql = """
+            SELECT * FROM get_vendor_orders(
+                :vendor_id,
+                :status,
+                :date_from,
+                :date_to,
+                :limit
+            );
+        """
+        
+        result = db.session.execute(
+            db.text(sql),
+            {
+                "vendor_id": vendor_id,
+                "status": status_filter,
+                "date_from": date_from_parsed,
+                "date_to": date_to_parsed,
+                "limit": limit
+            }
+        )
+        
+        orders = [row_to_dict(row) for row in result]
+        
+        return jsonify({
+            "orders": orders,
+            "total": len(orders),
+            "filters": {
+                "status": status_filter,
+                "date_from": date_from,
+                "date_to": date_to,
+                "limit": limit
+            }
+        }), 200
+        
+    except Exception as e:
+        return jsonify({"error": f"Database error: {str(e)}"}), 500
+
+
+# ============================================
+# 7. GET ORDER DETAILS (NEW)
+# ============================================
+@bp.route("/<int:vendor_id>/orders/<int:order_id>", methods=["GET"])
+@token_required
+@require_vendor
+def get_order_details(current_user, vendor_id, order_id):
+    """
+    Get detailed order information
+    SQL: Raw SQL with JOINs
+    """
+    try:
+        # Verify ownership
+        if not verify_vendor_ownership(current_user.id, vendor_id):
+            return jsonify({"error": "Access denied"}), 403
+        
+        # Get order details
+        order_sql = """
+            SELECT 
+                o.id,
+                o.customer_id,
+                u.full_name AS customer_name,
+                u.email AS customer_email,
+                u.phone AS customer_phone,
+                o.placed_at,
+                o.scheduled_for,
+                o.total_amount,
+                o.status,
+                o.payment_status,
+                o.pickup_or_delivery,
+                o.notes,
+                o.estimated_ready_at
+            FROM orders o
+            INNER JOIN users u ON o.customer_id = u.id
+            WHERE o.id = :order_id AND o.vendor_id = :vendor_id;
+        """
+        
+        order_result = db.session.execute(
+            db.text(order_sql),
+            {"order_id": order_id, "vendor_id": vendor_id}
+        ).first()
+        
+        if not order_result:
+            return jsonify({"error": "Order not found"}), 404
+        
+        # Get order items
+        items_sql = """
+            SELECT 
+                id,
+                menu_item_id,
+                name_snapshot AS name,
+                price_snapshot AS price,
+                quantity,
+                notes,
+                (price_snapshot * quantity) AS item_total
+            FROM order_items
+            WHERE order_id = :order_id
+            ORDER BY id;
+        """
+        
+        items_result = db.session.execute(
+            db.text(items_sql),
+            {"order_id": order_id}
+        )
+        
+        items = [row_to_dict(row) for row in items_result]
+        
+        return jsonify({
+            "order": row_to_dict(order_result),
+            "items": items,
+            "items_count": len(items)
+        }), 200
+        
+    except Exception as e:
+        return jsonify({"error": f"Database error: {str(e)}"}), 500
+
+
+# ============================================
+# 8. UPDATE ORDER STATUS (NEW - Key Feature!)
+# ============================================
+@bp.route("/<int:vendor_id>/orders/<int:order_id>/status", methods=["PUT"])
+@token_required
+@require_vendor
+def update_order_status(current_user, vendor_id, order_id):
+    """
+    Update order status (pending -> accepted -> preparing -> ready -> completed)
+    SQL: Calls update_order_status() stored procedure
+    """
+    try:
+        # Verify ownership
+        if not verify_vendor_ownership(current_user.id, vendor_id):
+            return jsonify({"error": "Access denied"}), 403
+        
+        data = request.get_json() or {}
+        new_status = data.get("status", "").strip()
+        estimated_ready_at = data.get("estimated_ready_at")
+        
+        if not new_status:
+            return jsonify({"error": "status is required"}), 400
+        
+        # Parse estimated_ready_at if provided
+        ready_time = None
+        if estimated_ready_at:
+            try:
+                ready_time = datetime.fromisoformat(estimated_ready_at.replace("Z", ""))
+            except:
+                return jsonify({"error": "Invalid estimated_ready_at format"}), 400
+        
+        # Call stored procedure
+        sql = """
+            SELECT * FROM update_order_status(
+                :vendor_id,
+                :order_id,
+                :new_status,
+                :estimated_ready_at
+            );
+        """
+        
+        result = db.session.execute(
+            db.text(sql),
+            {
+                "vendor_id": vendor_id,
+                "order_id": order_id,
+                "new_status": new_status,
+                "estimated_ready_at": ready_time
+            }
+        ).first()
+        
+        db.session.commit()
+        
+        if not result or result.status_message.startswith("ERROR"):
+            error_msg = result.status_message if result else "Failed to update status"
+            return jsonify({"error": error_msg}), 400
+        
+        return jsonify({
+            "message": "Order status updated successfully",
+            "order": {
+                "id": result.order_id,
+                "old_status": result.old_status,
+                "new_status": result.new_status,
+                "estimated_ready_at": result.estimated_ready_at.isoformat() if result.estimated_ready_at else None
+            }
+        }), 200
+        
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({"error": f"Database error: {str(e)}"}), 500
+
+
+# ============================================
+# 9. GET VENDOR STATISTICS (NEW)
+# ============================================
+@bp.route("/<int:vendor_id>/stats", methods=["GET"])
+@token_required
+@require_vendor
+def get_vendor_stats(current_user, vendor_id):
+    """
+    Get vendor statistics and analytics
+    SQL: Uses vendor_revenue_analytics view
+    """
+    try:
+        # Verify ownership
+        if not verify_vendor_ownership(current_user.id, vendor_id):
+            return jsonify({"error": "Access denied"}), 403
+        
+        # Get revenue analytics
+        stats_sql = """
+            SELECT 
+                total_orders,
+                total_revenue,
+                avg_order_value,
+                completed_orders,
+                cancelled_orders,
+                pending_orders
+            FROM vendor_revenue_analytics
+            WHERE vendor_id = :vendor_id;
+        """
+        
+        stats = db.session.execute(
+            db.text(stats_sql),
+            {"vendor_id": vendor_id}
+        ).first()
+        
+        if not stats:
+            return jsonify({
+                "stats": {
+                    "total_orders": 0,
+                    "total_revenue": 0.0,
+                    "avg_order_value": 0.0,
+                    "completed_orders": 0,
+                    "cancelled_orders": 0,
+                    "pending_orders": 0
+                }
+            }), 200
+        
+        return jsonify({
+            "stats": row_to_dict(stats)
+        }), 200
+        
+    except Exception as e:
+        return jsonify({"error": f"Database error: {str(e)}"}), 500
+
+
+# ============================================
+# 10. HEALTH CHECK
+# ============================================
+@bp.route("/health", methods=["GET"])
+def health_check():
+    """Health check endpoint"""
+    try:
+        db.session.execute(db.text("SELECT 1"))
+        return jsonify({
+            "status": "healthy",
+            "service": "vendor_routes",
+            "database": "connected"
+        }), 200
+    except Exception as e:
+        return jsonify({
+            "status": "unhealthy",
+            "service": "vendor_routes",
+            "error": str(e)
+        }), 500
