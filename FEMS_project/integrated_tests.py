@@ -46,8 +46,8 @@ def create_vendor():
     # 1. Register Vendor
     print_info("Registering vendor...")
     response = requests.post(f"{BASE_URL}/api/register", json={
-        "email": "gourmet_kitchen@example.com",
-        "password": "gourmet123"
+        "email": "gourmet@example.com",
+        "password": "gourmet"
     })
     data = response.json()
     if response.status_code != 201:
@@ -59,7 +59,7 @@ def create_vendor():
     # 2. Verify Email
     print_info("Verifying email...")
     response = requests.post(f"{BASE_URL}/api/verify-email", json={
-        "email": "gourmet_kitchen@example.com",
+        "email": "gourmet@example.com",
         "code": verification_code
     })
     if response.status_code != 200:
@@ -70,8 +70,8 @@ def create_vendor():
     # 3. Login
     print_info("Logging in...")
     response = requests.post(f"{BASE_URL}/api/login", json={
-        "email": "gourmet_kitchen@example.com",
-        "password": "gourmet123"
+        "email": "gourmet@example.com",
+        "password": "gourmet"
     })
     data = response.json()
     if response.status_code != 200:
@@ -167,7 +167,7 @@ def create_customer_and_order(vendor_info):
     # 1. Register Customer
     print_info("Registering customer...")
     response = requests.post(f"{BASE_URL}/api/register", json={
-        "email": "alice_customer@example.com",
+        "email": "ali_customer@example.com",
         "password": "alice123"
     })
     data = response.json()
@@ -180,7 +180,7 @@ def create_customer_and_order(vendor_info):
     # 2. Verify Email
     print_info("Verifying email...")
     response = requests.post(f"{BASE_URL}/api/verify-email", json={
-        "email": "alice_customer@example.com",
+        "email": "ali_customer@example.com",
         "code": verification_code
     })
     if response.status_code != 200:
@@ -191,7 +191,7 @@ def create_customer_and_order(vendor_info):
     # 3. Login
     print_info("Logging in...")
     response = requests.post(f"{BASE_URL}/api/login", json={
-        "email": "alice_customer@example.com",
+        "email": "ali_customer@example.com",
         "password": "alice123"
     })
     data = response.json()
@@ -207,7 +207,7 @@ def create_customer_and_order(vendor_info):
     response = requests.post(f"{BASE_URL}/api/complete-profile",
         headers={"Authorization": f"Bearer {customer_token}"},
         json={
-            "full_name": "Alice Customer",
+            "full_name": "Ali Customer",
             "phone": "9998887777",
             "role": "customer"
         }

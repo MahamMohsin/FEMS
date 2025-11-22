@@ -22,7 +22,7 @@ from .models import Vendor, Menu, MenuItem, Order, OrderItem, User
 from .auth import token_required
 from datetime import datetime
 from decimal import Decimal 
-import json #to convert python objs to json format
+import json #to convert python objs to json format for stored preocedures
 
 #blueprint for customer routes which will be used to get all customer related routes
 bp = Blueprint("customer", __name__, url_prefix="/api/customer")
@@ -40,13 +40,13 @@ def require_customer(f):
 
 
 def row_to_dict(row):
-    """Convert database row to JSON-serializable dictionary"""
+    """Converts database row to JSON-serializable dictionary"""
     if row is None:
         return None
     
     result = dict(row._mapping)
     
-    # Convert Decimal to float and datetime to ISO format
+    #convert Decimal to float and datetime to ISO format
     for key, value in result.items():
         if isinstance(value, Decimal):
             result[key] = float(value)
@@ -59,12 +59,13 @@ def row_to_dict(row):
 # ============================================
 # 1. BROWSE VENDORS
 # ============================================
+
 @bp.route("/vendors", methods=["GET"])
-@token_required
-@require_customer
+@token_required #verifies customer token to inject current user parameter into func
+@require_customer #this decorator runs to validate customer then continues to function if customer
 def get_all_vendors(current_user):
     """
-    Get all available vendors on campus
+    Gets all available vendors on campus
     SQL: INNER JOIN between vendors and users
     """
     try:
@@ -83,8 +84,8 @@ def get_all_vendors(current_user):
             ORDER BY v.vendor_name;
         """
         
-        result = db.session.execute(db.text(sql))
-        vendors = [row_to_dict(row) for row in result]
+        result = db.session.execute(db.text(sql)) #sql query string sent
+        vendors = [row_to_dict(row) for row in result] #sql row to python dict
         
         return jsonify({
             "vendors": vendors,
@@ -99,16 +100,17 @@ def get_all_vendors(current_user):
 # ============================================
 # 2. VIEW VENDOR MENU
 # ============================================
+
 @bp.route("/vendors/<int:vendor_id>/menu", methods=["GET"])
 @token_required
 @require_customer
 def get_vendor_menu(current_user, vendor_id):
     """
-    Get vendor's menu with all items
+    Gets vendor's menu with all items
     SQL: Multiple LEFT JOINs
     """
     try:
-        # Get vendor info - FIXED: Use :param syntax
+        #gets vendor info 
         vendor_sql = """
             SELECT 
                 id, 
@@ -128,7 +130,7 @@ def get_vendor_menu(current_user, vendor_id):
         if not vendor_result:
             return jsonify({"error": "Vendor not found"}), 404
         
-        # Get menu with items - FIXED: Use :param syntax
+        #get menu with items - continued query if vendor found
         menu_sql = """
             SELECT 
                 m.id AS menu_id,
@@ -146,13 +148,14 @@ def get_vendor_menu(current_user, vendor_id):
             WHERE m.vendor_id = :vendor_id AND m.is_active = TRUE
             ORDER BY mi.name;
         """
+        #left join will ensure menu returned even if no items to display
         
         menu_result = db.session.execute(
             db.text(menu_sql), 
             {"vendor_id": vendor_id}
         )
         
-        # Process results
+        #processing results
         menu_info = None
         items = []
         
@@ -188,8 +191,9 @@ def get_vendor_menu(current_user, vendor_id):
 
 
 # ============================================
-# 3. PLACE ORDER (Stored Procedure) - FULLY FIXED
+# 3. PLACE ORDER (Stored Procedure) 
 # ============================================
+
 @bp.route("/orders", methods=["POST"])
 @token_required
 @require_customer
@@ -199,19 +203,19 @@ def place_order(current_user):
     SQL: Calls place_customer_order() with transaction handling
     """
     try:
-        data = request.get_json() or {}
+        data = request.get_json() or {} #contains customer items and all
         
-        # Validate required fields
+        #validate required fields
         required = ["vendor_id", "pickup_time", "items"]
         for field in required:
             if field not in data:
                 return jsonify({"error": f"{field} is required"}), 400
         
-        # Validate items array
+        #validate items array
         if not isinstance(data["items"], list) or len(data["items"]) == 0:
             return jsonify({"error": "items must be a non-empty array"}), 400
         
-        # Validate each item
+        #validate each item
         for idx, item in enumerate(data["items"]):
             if "menu_item_id" not in item:
                 return jsonify({"error": f"Item {idx}: menu_item_id is required"}), 400
@@ -220,20 +224,20 @@ def place_order(current_user):
             if not isinstance(item["quantity"], int) or item["quantity"] < 1:
                 return jsonify({"error": f"Item {idx}: quantity must be positive integer"}), 400
         
-        # Parse pickup time
+        #parse pickup time
         try:
             pickup_time = datetime.fromisoformat(data["pickup_time"].replace("Z", ""))
         except:
             return jsonify({"error": "Invalid pickup_time format. Use ISO format: 2025-12-01T14:30:00"}), 400
         
-        # Check if pickup time is in future
+        #check if pickup time is in future
         if pickup_time <= datetime.utcnow():
             return jsonify({"error": "Pickup time must be in the future"}), 400
         
-        # Prepare items as JSON
+        #prepare items as JSON
         items_json = json.dumps(data["items"])
         
-        # CRITICAL FIX: ALL parameters use :param syntax, use CAST() for jsonb
+        #all parameters use :param syntax, use CAST() for jsonb for parsing thro sql code
         sql = """
             SELECT * FROM place_customer_order(
                 :customer_id,
@@ -267,7 +271,7 @@ def place_order(current_user):
         if result.status_message.startswith("ERROR"):
             return jsonify({"error": result.status_message}), 400
         
-        # Get complete order details - FIXED: Use :param syntax
+        # Get complete order details 
         order_sql = """
             SELECT 
                 o.id, 
@@ -321,7 +325,7 @@ def get_order_details(current_user, order_id):
     SQL: Complex query with subqueries
     """
     try:
-        # FIXED: Use :param syntax
+    
         sql = """
             SELECT 
                 o.id,
@@ -351,7 +355,7 @@ def get_order_details(current_user, order_id):
         if not result:
             return jsonify({"error": "Order not found"}), 404
         
-        # Get order items - FIXED: Use :param syntax
+        # Get order items 
         items_sql = """
             SELECT 
                 id,
@@ -554,7 +558,7 @@ def get_customer_stats(current_user):
 def health_check():
     """Health check endpoint - no authentication required"""
     try:
-        # Test database connection
+        #testing database connection
         db.session.execute(db.text("SELECT 1"))
         return jsonify({
             "status": "healthy",
