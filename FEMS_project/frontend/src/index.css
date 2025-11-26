@@ -1,99 +1,125 @@
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=DM+Sans:wght@400;500;700&display=swap');
-
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
-:root {
-  --background: 0 0% 100%;
-  --foreground: 222.2 84% 4.9%;
-  --radius: 0.5rem;
-}
+/* Definition of the design system. All colors, gradients, fonts, etc should be defined here. 
+All colors MUST be HSL.
+*/
 
-body {
-  font-family: 'Inter', sans-serif;
-  background: linear-gradient(135deg, #FFF8E7 0%, #FFE5B4 50%, #FFEFD5 100%);
-  min-height: 100vh;
-  color: #2C3E50;
-}
+@layer base {
+  :root {
+    /* FEMS Design System - Navy & Amber with warm cream backgrounds */
+    --background: 42 100% 95%;  /* Warm cream #FFF8E7 */
+    --foreground: 210 29% 24%;  /* Navy #2C3E50 */
 
-/* Glassmorphism utilities */
-.glass {
-  background: rgba(255, 255, 255, 0.7);
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
-  border: 1px solid rgba(255, 255, 255, 0.3);
-}
+    --card: 0 0% 100%;  /* Pure white for cards */
+    --card-foreground: 210 29% 24%;
 
-.glass-card {
-  background: rgba(255, 255, 255, 0.9);
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
-  border: 1px solid rgba(255, 255, 255, 0.5);
-  box-shadow: 0 4px 6px rgba(0, 0, 0, 0.07), 0 10px 15px rgba(0, 0, 0, 0.1);
-}
+    --popover: 0 0% 100%;
+    --popover-foreground: 210 29% 24%;
 
-/* Smooth transitions */
-* {
-  transition: all 0.2s ease-in-out;
-}
+    /* Navy primary */
+    --primary: 210 29% 24%;  /* Navy #2C3E50 */
+    --primary-foreground: 0 0% 100%;
 
-/* Button styles */
-.btn-primary {
-  @apply bg-brand-amber hover:bg-opacity-90 text-white font-semibold py-2 px-6 rounded-lg shadow-md hover:shadow-lg transform hover:-translate-y-0.5;
-}
+    /* Light secondary */
+    --secondary: 210 8% 93%;
+    --secondary-foreground: 210 29% 24%;
 
-.btn-secondary {
-  @apply bg-brand-navy hover:bg-opacity-90 text-white font-semibold py-2 px-6 rounded-lg shadow-md hover:shadow-lg transform hover:-translate-y-0.5;
-}
+    --muted: 210 8% 93%;
+    --muted-foreground: 184 6% 54%;  /* #7F8C8D */
 
-.btn-success {
-  @apply bg-brand-green hover:bg-opacity-90 text-white font-semibold py-2 px-4 rounded-lg shadow-md hover:shadow-lg;
-}
+    /* Amber accent */
+    --accent: 38 90% 52%;  /* Amber #F39C12 */
+    --accent-foreground: 0 0% 100%;
 
-.btn-danger {
-  @apply bg-brand-red hover:bg-opacity-90 text-white font-semibold py-2 px-4 rounded-lg shadow-md hover:shadow-lg;
-}
+    --destructive: 6 78% 57%;  /* Red #E74C3C */
+    --destructive-foreground: 0 0% 100%;
 
-/* Input styles */
-.input-field {
-  @apply w-full px-4 py-3 rounded-lg border border-gray-300 focus:border-brand-amber focus:ring-2 focus:ring-brand-amber focus:ring-opacity-50 outline-none glass-card;
-}
+    --border: 210 29% 24% / 0.08;
+    --input: 0 0% 90%;
+    --ring: 38 90% 52%;  /* Amber focus ring */
 
-/* Card styles */
-.card {
-  @apply glass-card rounded-xl p-6;
-}
+    --radius: 0.75rem;
 
-/* Animations */
-@keyframes fadeIn {
-  from {
-    opacity: 0;
-    transform: translateY(10px);
+    /* Custom FEMS tokens */
+    --success: 145 63% 42%;  /* Green #27AE60 */
+    --warning: 38 90% 52%;  /* Amber #F39C12 */
+    --info: 204 70% 53%;  /* Blue #3498DB */
+    --preparing: 282 44% 54%;  /* Purple #9B59B6 */
+    
+    /* Shadows */
+    --shadow-soft: 0 2px 4px rgba(0, 0, 0, 0.05);
+    --shadow-medium: 0 4px 6px rgba(0, 0, 0, 0.07), 0 10px 15px rgba(0, 0, 0, 0.1);
+    --shadow-card: 0 4px 6px rgba(0, 0, 0, 0.07), 0 10px 15px rgba(0, 0, 0, 0.1);
+    --shadow-large: 0 12px 24px rgba(0, 0, 0, 0.15);
+
+    --sidebar-background: 0 0% 100%;
+    --sidebar-foreground: 210 29% 24%;
+    --sidebar-primary: 210 29% 24%;
+    --sidebar-primary-foreground: 0 0% 100%;
+    --sidebar-accent: 210 8% 96%;
+    --sidebar-accent-foreground: 210 29% 24%;
+    --sidebar-border: 210 29% 24% / 0.08;
+    --sidebar-ring: 38 90% 52%;
   }
 
-  to {
-    opacity: 1;
-    transform: translateY(0);
+  .dark {
+    --background: 210 29% 12%;
+    --foreground: 0 0% 95%;
+
+    --card: 210 29% 14%;
+    --card-foreground: 0 0% 95%;
+
+    --popover: 210 29% 14%;
+    --popover-foreground: 0 0% 95%;
+
+    --primary: 210 29% 24%;
+    --primary-foreground: 0 0% 100%;
+
+    --secondary: 210 20% 18%;
+    --secondary-foreground: 0 0% 95%;
+
+    --muted: 210 20% 18%;
+    --muted-foreground: 184 6% 65%;
+
+    --accent: 38 90% 60%;
+    --accent-foreground: 210 29% 12%;
+
+    --destructive: 6 78% 57%;
+    --destructive-foreground: 0 0% 100%;
+
+    --border: 210 20% 22%;
+    --input: 210 20% 22%;
+    --ring: 38 90% 52%;
+
+    --success: 145 63% 50%;
+    --warning: 38 90% 60%;
+    --info: 204 70% 60%;
+    --preparing: 282 44% 60%;
+
+    --sidebar-background: 210 29% 14%;
+    --sidebar-foreground: 0 0% 90%;
+    --sidebar-primary: 210 29% 24%;
+    --sidebar-primary-foreground: 0 0% 100%;
+    --sidebar-accent: 210 20% 20%;
+    --sidebar-accent-foreground: 0 0% 90%;
+    --sidebar-border: 210 20% 22%;
+    --sidebar-ring: 38 90% 52%;
   }
 }
 
-.animate-fadeIn {
-  animation: fadeIn 0.3s ease-out;
-}
+@layer base {
+  * {
+    @apply border-border;
+  }
 
-/* Loading spinner */
-.spinner {
-  border: 3px solid rgba(243, 156, 18, 0.3);
-  border-top-color: #F39C12;
-  border-radius: 50%;
-  width: 40px;
-  height: 40px;
-  animation: spin 0.8s linear infinite;
-}
+  body {
+    @apply bg-background text-foreground font-sans;
+    font-family: 'Inter', sans-serif;
+  }
 
-@keyframes spin {
-  to {
-    transform: rotate(360deg);
+  h1, h2, h3, h4, h5, h6 {
+    font-family: 'DM Sans', sans-serif;
   }
 }
