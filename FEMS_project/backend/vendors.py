@@ -1,7 +1,6 @@
 # backend/vendors.py
 """
-Vendor Routes for FEMS - REFACTORED VERSION
-Uses Stored Procedures & Raw SQL (Same approach as customer_routes.py)
+Vendor Routes for FEMS 
 
 Features:
 1. Menu Management (Create, View)
@@ -419,75 +418,92 @@ def get_vendor(vendor_id):
 @require_vendor
 def get_vendor_orders(current_user, vendor_id):
     """
-    Get vendor's orders with filters
-    SQL: Calls get_vendor_orders() stored procedure
+    Get vendor's orders with filters and items
+    SQL: Raw SQL with JOINs
     """
     try:
         # Verify ownership
         if not verify_vendor_ownership(current_user.id, vendor_id):
             return jsonify({"error": "Access denied"}), 403
-        
+
         # Get query parameters
         status_filter = request.args.get("status")
         limit = request.args.get("limit", 50, type=int)
-        date_from = request.args.get("date_from")  # ISO format
-        date_to = request.args.get("date_to")      # ISO format
-        
+
         # Validate limit
         if limit < 1 or limit > 100:
             return jsonify({"error": "Limit must be between 1 and 100"}), 400
-        
-        # Parse dates if provided
-        date_from_parsed = None
-        date_to_parsed = None
-        
-        if date_from:
-            try:
-                date_from_parsed = datetime.fromisoformat(date_from.replace("Z", ""))
-            except:
-                return jsonify({"error": "Invalid date_from format. Use ISO format"}), 400
-        
-        if date_to:
-            try:
-                date_to_parsed = datetime.fromisoformat(date_to.replace("Z", ""))
-            except:
-                return jsonify({"error": "Invalid date_to format. Use ISO format"}), 400
-        
-        # Call stored procedure
+
+        # Get orders
         sql = """
-            SELECT * FROM get_vendor_orders(
-                :vendor_id,
-                :status,
-                :date_from,
-                :date_to,
-                :limit
-            );
+            SELECT
+                o.id AS order_id,
+                o.customer_id,
+                u.full_name AS customer_name,
+                u.email AS customer_email,
+                u.phone AS customer_phone,
+                o.placed_at,
+                o.scheduled_for,
+                o.total_amount,
+                o.status,
+                o.payment_status,
+                o.pickup_or_delivery,
+                o.notes,
+                o.estimated_ready_at
+            FROM orders o
+            INNER JOIN users u ON o.customer_id = u.id
+            WHERE o.vendor_id = :vendor_id
         """
-        
-        result = db.session.execute(
-            db.text(sql),
-            {
-                "vendor_id": vendor_id,
-                "status": status_filter,
-                "date_from": date_from_parsed,
-                "date_to": date_to_parsed,
-                "limit": limit
-            }
-        )
-        
+
+        params = {"vendor_id": vendor_id}
+
+        # Add status filter if provided
+        if status_filter:
+            valid_statuses = ['pending', 'accepted', 'preparing', 'ready', 'completed', 'cancelled', 'rejected']
+            if status_filter not in valid_statuses:
+                return jsonify({"error": f"Invalid status. Must be one of: {', '.join(valid_statuses)}"}), 400
+            sql += " AND o.status = :status"
+            params["status"] = status_filter
+
+        sql += """
+            ORDER BY o.placed_at DESC
+            LIMIT :limit;
+        """
+        params["limit"] = limit
+
+        result = db.session.execute(db.text(sql), params)
         orders = [row_to_dict(row) for row in result]
-        
+
+        # Fetch items for each order
+        for order in orders:
+            items_sql = """
+                SELECT
+                    id,
+                    name_snapshot AS name,
+                    price_snapshot AS price,
+                    quantity,
+                    notes
+                FROM order_items
+                WHERE order_id = :order_id
+                ORDER BY id;
+            """
+
+            items_result = db.session.execute(
+                db.text(items_sql),
+                {"order_id": order["order_id"]}
+            )
+
+            order["items"] = [row_to_dict(row) for row in items_result]
+
         return jsonify({
             "orders": orders,
             "total": len(orders),
             "filters": {
                 "status": status_filter,
-                "date_from": date_from,
-                "date_to": date_to,
                 "limit": limit
             }
         }), 200
-        
+
     except Exception as e:
         return jsonify({"error": f"Database error: {str(e)}"}), 500
 

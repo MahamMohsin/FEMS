@@ -1,7 +1,7 @@
 # backend/auth.py
 from flask import Blueprint, request, jsonify, current_app
 from .extensions import db
-from .models import User, EmailVerification, Vendor  # import any models you need
+from .models import User, EmailVerification, Vendor  #import any models you need
 from .utils import hash_password, check_password, create_token, decode_token, generate_verification_code
 from datetime import datetime, timedelta
 from functools import wraps
@@ -75,11 +75,42 @@ def register():
     if len(password) < 6:
         return jsonify({"error": "Password must be at least 6 characters"}), 400
 
+    # Get profile data if provided
+    full_name = data.get("full_name", "").strip()
+    phone = data.get("phone", "").strip()
+    role = data.get("role", "customer").lower().strip()
+    
+    # Validate role
+    if role not in ("vendor", "customer"):
+        return jsonify({"error": "role must be 'vendor' or 'customer'"}), 400
+
+    # If profile data is provided, validate required fields
+    if full_name or phone:
+        if not full_name or not phone:
+            return jsonify({"error": "full_name and phone are required when provided"}), 400
+        if role == "vendor" and not data.get("vendor_name", "").strip():
+            return jsonify({"error": "vendor_name is required for vendor role"}), 400
+
     hashed = hash_password(password)
-    user = User(email=email, password_hash=hashed, role="customer")  # default role - set later on complete-profile
+    user = User(
+        email=email, 
+        password_hash=hashed, 
+        role=role,
+        full_name=full_name if full_name else None,
+        phone=phone if phone else None
+    )
+    
     try:
         db.session.add(user)
-        db.session.commit()
+        db.session.flush()  # Get user.id without committing
+
+        # If vendor role and vendor_name provided, create vendor profile
+        if role == "vendor" and data.get("vendor_name"):
+            from .models import Vendor
+            vendor_name = data.get("vendor_name", "").strip()
+            location = data.get("location", "").strip()
+            vendor = Vendor(user_id=user.id, vendor_name=vendor_name, location=location)
+            db.session.add(vendor)
 
         # create verification code for this user
         code = generate_verification_code(16)  # 32 hex chars
@@ -92,7 +123,8 @@ def register():
         return jsonify({
             "message": "User created. Please verify your email.",
             "user": user.to_dict(),
-            "verification_code": code  # remove in production; for dev convenience
+            "verification_code": code,  # remove in production; for dev convenience
+            "profile_data_provided": bool(full_name and phone)
         }), 201
     except Exception as e:
         db.session.rollback()
@@ -123,7 +155,15 @@ def verify_email():
         verification.is_used = True
         user.is_email_verified = True
         db.session.commit()
-        return jsonify({"message": "email verified", "user": user.to_dict()}), 200
+
+        # Generate token so user can complete profile
+        token = create_token(user.id, user.role)
+
+        return jsonify({
+            "message": "email verified",
+            "user": user.to_dict(),
+            "token": token
+        }), 200
     except Exception as e:
         db.session.rollback()
         return jsonify({"error": "DB error", "details": str(e)}), 500
@@ -150,12 +190,26 @@ def login():
     db.session.commit()
 
     token = create_token(user.id, user.role)
-    return jsonify({"message": "Login successful", "token": token, "user": user.to_dict()}), 200
+
+    # Include vendor data if user is a vendor
+    user_data = user.to_dict()
+    if user.role == "vendor" and user.vendor_profile:
+        user_data["vendor_id"] = user.vendor_profile.id
+        user_data["vendor_name"] = user.vendor_profile.vendor_name
+
+    return jsonify({"message": "Login successful", "token": token, "user": user_data}), 200
 
 @bp.route("/profile", methods=["GET"])
 @token_required
 def profile(current_user):
-    return jsonify({"user": current_user.to_dict()}), 200
+    user_data = current_user.to_dict()
+
+    # Include vendor_id if user is a vendor
+    if current_user.role == "vendor" and current_user.vendor_profile:
+        user_data["vendor_id"] = current_user.vendor_profile.id
+        user_data["vendor_name"] = current_user.vendor_profile.vendor_name
+
+    return jsonify({"user": user_data}), 200
 
 
 # Complete profile — full_name, phone, role; create vendor if role == 'vendor'
@@ -199,9 +253,16 @@ def complete_profile(current_user):
                 vendor_data = vendor.to_dict()
 
         db.session.commit()
+
+        # Include vendor_id in user data for vendors
+        user_data = current_user.to_dict()
+        if current_user.role == "vendor" and current_user.vendor_profile:
+            user_data["vendor_id"] = current_user.vendor_profile.id
+            user_data["vendor_name"] = current_user.vendor_profile.vendor_name
+
         return jsonify({
             "message": "Profile completed",
-            "user": current_user.to_dict(),
+            "user": user_data,
             "vendor": vendor_data
         }), 200
     except Exception as e:

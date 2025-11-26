@@ -393,46 +393,38 @@ def get_order_details(current_user, order_id):
 @require_customer
 def get_order_history(current_user):
     """
-    Get customer's order history
-    SQL: GROUP BY with aggregates and CASE statement
+    Get customer's order history with items
+    SQL: Multiple queries to fetch orders and their items
     """
     try:
         status_filter = request.args.get("status")
         limit = request.args.get("limit", 50, type=int)
-        
+
         # Validate limit
         if limit < 1 or limit > 100:
             return jsonify({"error": "Limit must be between 1 and 100"}), 400
-        
-        # FIXED: Use :param syntax
+
+        # Get orders
         sql = """
-            SELECT 
+            SELECT
                 o.id AS order_id,
+                o.vendor_id,
                 o.status,
+                o.payment_status,
                 o.total_amount,
                 o.placed_at,
                 o.scheduled_for,
+                o.pickup_or_delivery,
+                o.notes,
                 v.vendor_name,
-                v.location,
-                COUNT(oi.id) AS items_count,
-                COALESCE(SUM(oi.quantity), 0) AS total_items,
-                CASE 
-                    WHEN o.status = 'pending' THEN 'Waiting for confirmation'
-                    WHEN o.status = 'accepted' THEN 'Order confirmed'
-                    WHEN o.status = 'preparing' THEN 'Being prepared'
-                    WHEN o.status = 'ready' THEN 'Ready for pickup'
-                    WHEN o.status = 'completed' THEN 'Completed'
-                    WHEN o.status = 'cancelled' THEN 'Cancelled'
-                    ELSE 'Unknown status'
-                END AS status_description
+                v.location
             FROM orders o
             JOIN vendors v ON o.vendor_id = v.id
-            LEFT JOIN order_items oi ON o.id = oi.order_id
             WHERE o.customer_id = :customer_id
         """
-        
+
         params = {"customer_id": current_user.id}
-        
+
         # Add status filter if provided
         if status_filter:
             valid_statuses = ['pending', 'accepted', 'preparing', 'ready', 'completed', 'cancelled', 'rejected']
@@ -440,23 +432,43 @@ def get_order_history(current_user):
                 return jsonify({"error": f"Invalid status. Must be one of: {', '.join(valid_statuses)}"}), 400
             sql += " AND o.status = :status"
             params["status"] = status_filter
-        
+
         sql += """
-            GROUP BY o.id, o.status, o.total_amount, o.placed_at, o.scheduled_for, v.vendor_name, v.location
             ORDER BY o.placed_at DESC
             LIMIT :limit;
         """
         params["limit"] = limit
-        
+
         result = db.session.execute(db.text(sql), params)
         orders = [row_to_dict(row) for row in result]
-        
+
+        # Fetch items for each order
+        for order in orders:
+            items_sql = """
+                SELECT
+                    id,
+                    name_snapshot AS name,
+                    price_snapshot AS price,
+                    quantity,
+                    notes
+                FROM order_items
+                WHERE order_id = :order_id
+                ORDER BY id;
+            """
+
+            items_result = db.session.execute(
+                db.text(items_sql),
+                {"order_id": order["order_id"]}
+            )
+
+            order["items"] = [row_to_dict(row) for row in items_result]
+
         return jsonify({
             "orders": orders,
             "total": len(orders),
             "showing": len(orders)
         }), 200
-        
+
     except Exception as e:
         return jsonify({"error": f"Database error: {str(e)}"}), 500
 

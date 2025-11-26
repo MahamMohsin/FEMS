@@ -4,7 +4,6 @@ this file defines all database tables as classes basically showing howpython cla
 """
 
 from flask_sqlalchemy import SQLAlchemy #for connecting to the db
-from flask_login import UserMixin #for user auth
 from datetime import datetime, timezone #for timestamps
 
 #creating db connection obj that all db models will be using to connect with db
@@ -12,7 +11,7 @@ from datetime import datetime, timezone #for timestamps
 from .extensions import db
 
 #USER TABLE
-class User(db.Model, UserMixin):
+class User(db.Model):
     __tablename__ = 'users'
     
     id = db.Column(db.Integer, primary_key=True)
