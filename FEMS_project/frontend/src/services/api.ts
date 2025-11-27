@@ -30,7 +30,9 @@ api.interceptors.response.use(
   (error: AxiosError) => {
     if (error.response?.status === 401) {
       localStorage.removeItem('token');
-      window.location.href = '/login';
+      const path = window.location.pathname || '';
+      const role = path.startsWith('/vendor') ? 'vendor' : 'customer';
+      window.location.href = `/login?role=${role}`;
     }
     return Promise.reject(error);
   }
