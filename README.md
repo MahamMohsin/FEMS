@@ -147,8 +147,8 @@ python app.py
 ```
 
 2. In Supabase SQL Editor, run these SQL files:
-   - `backend/sql/customer_routes.sql`
-   - `backend/sql/vendor_routes.sql`
+   - `sql/customer_routes.sql`
+   - `sql/vendor_routes.sql`
 
 **Start Backend:**
 
