@@ -485,7 +485,6 @@ def cancel_order(current_user, order_id):
     SQL: Calls cancel_customer_order() stored procedure
     """
     try:
-        # FIXED: Use :param syntax
         sql = """
             SELECT cancel_customer_order(
                 :order_id, 
@@ -528,7 +527,6 @@ def get_customer_stats(current_user):
     SQL: Uses stored functions and views
     """
     try:
-        # FIXED: Use :param syntax
         sql = """
             SELECT 
                 get_customer_order_count(:customer_id) AS total_orders,
